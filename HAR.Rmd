@@ -1,0 +1,135 @@
+---
+title: "Human Activity Recognition"
+author: "Javier Carrasco"
+date: "September 8th, 2017"
+output: md_document
+---
+# Summary
+The objective of this project is to investigate a model that predicts the class of an activity from measurements collected using devices such as Jawbone Up, Nike FuelBand, and Fitbite. The model is trained using data from the [Human Activity Recognition dataset](http://groupware.les.inf.puc-rio.br/har) and more specifically data from accelerometers on the belt, forearm, arm and dumbell.
+
+# Data Analysis and Preparation
+The HAR dataset contains device measurements that were collected asking six young health participants to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+First, we load required libraries and the training and test sets:
+```{r warning=FALSE, message=FALSE}
+library(caret); library(gbm); library(plotmo); library(ggplot2)
+
+if (!file.exists("pml-training.csv")){
+        fileURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+        download.file(fileURL, "pml-training.csv", method="curl")
+}  
+if (!file.exists("pml-test.csv")){
+        fileURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+        download.file(fileURL, "pml-test.csv", method="curl")
+}
+train = read.csv("pml-training.csv")
+train.classe = train$classe
+test = read.csv("pml-test.csv")
+```
+
+Training data contains 19622 observations of 160 variables including
+device measurements and `classe`, the prediction outcome variable as a factor with 5 levels: A, B, C, D and E.
+
+Next, we filter columns corresponding to accelerometer measurements on the belt, forearm, arm and dumbel:
+```{r}
+filter = grepl("belt|arm|dumbell", names(train))
+train = train[, filter]
+train <- data.frame(sapply(train, as.numeric))
+test = test[, filter]
+test <- data.frame(sapply(test, as.numeric))
+```
+
+Finally, we pre-process the data with the `knnImpute` method to replace missing values with the average value of the nearest-neighbors:
+```{r}
+preObj <- preProcess(x = train, method = c("knnImpute"))
+train <- data.frame(predict(preObj, train))
+test <- data.frame(predict(preObj, test))
+```
+
+# Feature Selection
+To select features for the prediction model we apply the following steps:
+
+1. Remove near zero variables:
+    ```{r}
+    nzr = nearZeroVar(train, saveMetrics = T)    
+    row.names(nzr[nzr$nzv == T,])    
+    train = train[, row.names(nzr[nzr$nzv == F,])]    
+    test = test[, row.names(nzr[nzr$nzv == F,])]    
+    print(paste("#features:", length(colnames(train))))    
+    ```
+
+2. Remove variables which are highly correlated:
+Remove variables to reduce pair-wise correlations:
+    ```{r}
+    highlyCor <- findCorrelation(cor(train), exact = F)
+    colnames(train)[highlyCor]
+    train <- train[ , - highlyCor[complete.cases(highlyCor)]]
+    test <- test[ , - highlyCor[complete.cases(highlyCor)]]
+    print(paste("#features:", length(colnames(train))))
+    ```
+
+3. Apply PCA (Principal Component Analysis) and select those variables that capture 95% of the variance in the inputs:
+    ```{r}
+    preObj <- preProcess(x = train, method = c("pca"))
+    train <- data.frame(predict(preObj, train))
+    test <- data.frame(predict(preObj, test))
+    print(paste("#features:", length(colnames(train))))
+    ```
+
+After those steps the number of features is reduced from 160 to 32
+
+# Model Training
+First, we partition the train dataset into two sets, `inSample` with 70% of the training data and `outSample` with the remaining 30%:
+```{r}
+train$classe = train.classe
+set.seed(123)
+split = createDataPartition(y = train$classe, p = .7, list = F)
+inSample = train[split,]
+outSample = train[-split,]
+```
+
+Next, we train our model using "Gradient Boost Method" (`gbm`) with 2-fold cross validation and 2 repeats. For this training we choose three interaction depths (1, 3 and 5) and the maximum number of boosting iterations is set to 500.
+
+```{r message=FALSE, warning=FALSE}
+control <- trainControl(method="repeatedcv", number=2, repeats=2)
+gbmGrid <-  expand.grid(interaction.depth = c(1, 3, 5),
+                        n.trees = (1:10)*50,
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+model <- train(classe~., data=inSample, method="gbm", trControl=control, tuneGrid=gbmGrid)
+ggplot(model)
+```
+
+As it can be seen in the plot, the best performance is obtained when the maximum tree depth is 5 and the number of boosting iterations is 500. The plot also suggests that prediction's accuracy could be further improved by increasing the maximum tree depth and the number of boosting interactions.
+
+The following plot shows the relative importante of each feature:
+```{r}
+importance = varImp(model, scale = TRUE)
+ggplot(importance)
+```
+
+The confusion matrix for `inSample` is:
+```{r}
+predictions <- predict(model, newdata = inSample)
+cnfM <- confusionMatrix(inSample$classe, predictions)
+cnfM
+```
+
+and the in-sample error is approximately 2%.
+
+The confusion matrix for `outSample` is:
+```{r}
+predictions <- predict(model, newdata = outSample)
+cnfM <- confusionMatrix(outSample$classe, predictions)
+cnfM
+```
+
+and the out-of-sample error is approximately 11%.
+
+# Predictions
+Let us apply our prediction model to the 20 test cases:
+```{r message=FALSE, warning=FALSE}
+predictions = predict(model, newdata = test)
+predictions = mapvalues(predictions, from = c(1, 2, 3, 4, 5), to = c("A", "B", "C", "D", "E"))
+predictions
+```
