@@ -1,6 +1,7 @@
-% Human Activity Recognition
-% Javier Carrasco
-% September 8th, 2017
+Human Activity Recognition
+==========================
+#### *Javier Carrasco*
+#### *September 8th, 2017*
 
 Summary
 =======
